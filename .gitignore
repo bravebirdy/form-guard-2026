@@ -1,0 +1,48 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Python packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Installer / tooling caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.hypothesis/
+.tox/
+nox/
+
+# Logs
+*.log
+
+# OS / editor files
+.DS_Store
+.idea/
+.vscode/
+
+# Local environment & secrets (do not commit)
+.env
+.env.*
+!.env.example
+
+# Uvicorn / FastAPI dev artifacts (if used)
+*.pid
+
