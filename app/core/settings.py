@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     env: str = "dev"
     app_name: str = "formguard-api"
 
-    database_url: str
+    database_url: str = ''
 
     trusted_proxy_cidrs: str = ""
     default_limit_per_hour: int = 60

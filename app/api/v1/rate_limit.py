@@ -10,7 +10,7 @@ from app.api.v1.schemas import (
 )
 from app.core.ip import get_client_ip
 from app.db.session import db_session
-from app.services.rate_limiter import decide, record_success
+from app.services.rate_limiter import auto_block_if_exceeded, decide, record_success
 
 router = APIRouter(prefix="/rate-limit", tags=["rate-limit"])
 
@@ -64,6 +64,8 @@ def record(payload: RateLimitRecordRequest, request: Request) -> RateLimitRecord
             request_id=payload.request_id,
             user_agent=ua,
         )
+
+        auto_block_if_exceeded(session, form_key=payload.form_key, ip=ip)
 
     return RateLimitRecordResponse(event_id=event_id)
 

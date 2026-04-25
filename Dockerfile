@@ -1,18 +1,13 @@
-FROM python:3.12-slim
+FROM python:3.13-slim
 
 WORKDIR /app
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+COPY requirements.txt .
 
-COPY pyproject.toml /app/pyproject.toml
-
-RUN pip install --no-cache-dir -U pip && \
-    pip install --no-cache-dir .
+# Install dependencies
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app /app/app
-COPY alembic /app/alembic
-COPY alembic.ini /app/alembic.ini
 
 EXPOSE 8000
 
