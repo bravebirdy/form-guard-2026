@@ -12,9 +12,8 @@ from sqlalchemy.orm import Session
 from app.core.settings import settings
 from app.db.models import FormRateLimitDefault, IpRateLimitOverride, SubmissionEvent
 
-
 WINDOW = timedelta(minutes=60)
-AUTO_BLOCK_EXCEED_BY = 5
+AUTO_BLOCK_EXCEED_BY = 5  # exceed number 超过了几个record
 AUTO_BLOCK_NOTE = "auto_block: exceeded limit by 5"
 
 
@@ -51,9 +50,15 @@ def _match_override(session: Session, form_key: str, ip: str) -> RuleMatch | Non
 
     def q(form_key_value: str | None) -> Select:
         return (
-            select(*base_cols, func.masklen(IpRateLimitOverride.ip_range).label("masklen"))
+            select(
+                *base_cols, func.masklen(IpRateLimitOverride.ip_range).label("masklen")
+            )
             .where(IpRateLimitOverride.enabled.is_(True))
-            .where(IpRateLimitOverride.form_key.is_(None) if form_key_value is None else IpRateLimitOverride.form_key == form_key_value)
+            .where(
+                IpRateLimitOverride.form_key.is_(None)
+                if form_key_value is None
+                else IpRateLimitOverride.form_key == form_key_value
+            )
             .where(contains_ip)
             .order_by(desc("masklen"), desc(IpRateLimitOverride.id))
             .limit(1)
@@ -62,31 +67,38 @@ def _match_override(session: Session, form_key: str, ip: str) -> RuleMatch | Non
     row = session.execute(q(form_key).params(ip=ip)).first()
     if row:
         rule_id, limit, _masklen = row
-        return RuleMatch(rule_id=rule_id, limit_per_hour=int(limit), source="override_form")
+        return RuleMatch(
+            rule_id=rule_id, limit_per_hour=int(limit), source="override_form"
+        )
 
     row = session.execute(q(None).params(ip=ip)).first()
     if row:
         rule_id, limit, _masklen = row
-        return RuleMatch(rule_id=rule_id, limit_per_hour=int(limit), source="override_global")
+        return RuleMatch(
+            rule_id=rule_id, limit_per_hour=int(limit), source="override_global"
+        )
 
     return None
 
 
 def _match_default(session: Session, form_key: str) -> RuleMatch:
-    row = (
-        session.execute(
-            select(FormRateLimitDefault.id, FormRateLimitDefault.limit_per_hour)
-            .where(FormRateLimitDefault.form_key == form_key)
-            .where(FormRateLimitDefault.enabled.is_(True))
-            .limit(1)
-        )
-        .first()
-    )
+    row = session.execute(
+        select(FormRateLimitDefault.id, FormRateLimitDefault.limit_per_hour)
+        .where(FormRateLimitDefault.form_key == form_key)
+        .where(FormRateLimitDefault.enabled.is_(True))
+        .limit(1)
+    ).first()
     if row:
         rule_id, limit = row
-        return RuleMatch(rule_id=rule_id, limit_per_hour=int(limit), source="default_form")
+        return RuleMatch(
+            rule_id=rule_id, limit_per_hour=int(limit), source="default_form"
+        )
 
-    return RuleMatch(rule_id=None, limit_per_hour=int(settings.default_limit_per_hour), source="default_fallback")
+    return RuleMatch(
+        rule_id=None,
+        limit_per_hour=int(settings.default_limit_per_hour),
+        source="default_fallback",
+    )
 
 
 def match_rule(session: Session, form_key: str, ip: str) -> RuleMatch:
@@ -96,7 +108,9 @@ def match_rule(session: Session, form_key: str, ip: str) -> RuleMatch:
     return _match_default(session, form_key=form_key)
 
 
-def decide(session: Session, form_key: str, ip: str, now: datetime | None = None) -> RateLimitDecision:
+def decide(
+    session: Session, form_key: str, ip: str, now: datetime | None = None
+) -> RateLimitDecision:
     now = now or _now()
     window_start = now - WINDOW
 
@@ -172,7 +186,9 @@ def record_success(
     request_id: str | None = None,
     user_agent: str | None = None,
 ) -> int:
-    event = SubmissionEvent(form_key=form_key, ip=ip, request_id=request_id, user_agent=user_agent)
+    event = SubmissionEvent(
+        form_key=form_key, ip=ip, request_id=request_id, user_agent=user_agent
+    )
     session.add(event)
     session.flush()
     return int(event.id)
@@ -244,7 +260,12 @@ def auto_block_if_exceeded(
             enabled=True,
             note=note,
         )
-        .on_conflict_do_nothing(index_elements=[IpRateLimitOverride.form_key.name, IpRateLimitOverride.ip_range.name])
+        .on_conflict_do_nothing(
+            index_elements=[
+                IpRateLimitOverride.form_key.name,
+                IpRateLimitOverride.ip_range.name,
+            ]
+        )
         .returning(IpRateLimitOverride.id)
     )
 
@@ -272,4 +293,3 @@ def auto_block_if_exceeded(
         return False
 
     return inserted_id is not None
-
