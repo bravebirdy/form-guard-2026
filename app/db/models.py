@@ -93,3 +93,21 @@ class SubmissionEvent(Base):
 
     request_id: Mapped[str | None] = mapped_column(String, nullable=True)
     user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class Check429Strikes(Base):
+    """
+    采用累计 10 次 429（无时间衰减）即永久封禁。
+    """
+
+    __tablename__ = "check_429_strikes"
+    __table_args__ = (
+        UniqueConstraint("form_key", "ip", name="uq_form_key_ip"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    form_key: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    ip: Mapped[str] = mapped_column(INET, nullable=False, index=True)
+    count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
