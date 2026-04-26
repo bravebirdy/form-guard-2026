@@ -10,7 +10,11 @@ from app.api.v1.schemas import (
 )
 from app.core.ip import get_client_ip
 from app.db.session import db_session
-from app.services.rate_limiter import decide, record_success
+from app.services.rate_limiter import (
+    bump_check_429_and_maybe_perma_block,
+    decide,
+    record_success,
+)
 
 router = APIRouter(prefix="/rate-limit", tags=["rate-limit"])
 
@@ -26,6 +30,10 @@ def check(payload: RateLimitCheckRequest, request: Request) -> RateLimitCheckRes
 
     with db_session() as session:
         d = decide(session, form_key=payload.form_key, ip=ip)
+        if not d.allowed:
+            bump_check_429_and_maybe_perma_block(
+                session, form_key=payload.form_key, ip=ip, d=d
+            )
 
     if not d.allowed:
         raise HTTPException(
@@ -54,8 +62,6 @@ def check(payload: RateLimitCheckRequest, request: Request) -> RateLimitCheckRes
         matched_source=d.matched_source,
     )
 
-
-# todo: /check 调用出现 429 error 出现10次 就自动永久屏蔽该IP+form_key. - 添加一个ip_rate_limit_overrides 记录，设置 limit_per_hour = 0
 
 @router.post("/record", response_model=RateLimitRecordResponse)
 def record(

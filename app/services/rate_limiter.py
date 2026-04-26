@@ -6,15 +6,19 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import Select, and_, desc, func, select, text
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.orm import Session
 
 from app.core.settings import settings
-from app.db.models import FormRateLimitDefault, IpRateLimitOverride, SubmissionEvent
+from app.db.models import (
+    Check429Strikes,
+    FormRateLimitDefault,
+    IpRateLimitOverride,
+    SubmissionEvent,
+)
 
 WINDOW = timedelta(minutes=60)
-AUTO_BLOCK_EXCEED_BY = 5  # exceed number 超过了几个record
-AUTO_BLOCK_NOTE = "auto_block: exceeded limit by 5"
+CHECK_429_STRIKES_TO_PERMA_BLOCK = 10
+CHECK_429_PERMA_BLOCK_NOTE = "auto_block: /check 429 x10 (limit_per_hour=0)"
 
 
 @dataclass(frozen=True)
@@ -192,3 +196,65 @@ def record_success(
     session.add(event)
     session.flush()
     return int(event.id)
+
+
+def _host_cidr(client_ip: str) -> str:
+    addr = ipaddress.ip_address(client_ip)
+    if addr.version == 4:
+        return f"{addr.compressed}/32"
+    return f"{addr.compressed}/128"
+
+
+def bump_check_429_and_maybe_perma_block(
+    session: Session, form_key: str, ip: str, d: RateLimitDecision
+) -> None:
+    """
+    On each /check that would return 429, increment the strike counter. After
+    CHECK_429_STRIKES_TO_PERMA_BLOCK denials, insert (or update) a host-level
+    ip_rate_limit_overrides row with limit_per_hour=0.
+    Skips counting when the denial is already due to an override with limit=0.
+    """
+
+    # 如果当前限制已经是通过 override_form 或 override_global 且 limit 为0，则不再累加429计数，直接返回
+    if d.limit == 0 and d.matched_source in (
+        "override_form",
+        "override_global",
+    ):
+        return
+
+    # 插入或更新 Check429Strikes（ip+form_key 联合唯一），当发生 /check 429 时为每个 (form_key, ip) 组合计数加1
+    strike = (
+        insert(Check429Strikes)
+        .values(form_key=form_key, ip=ip, count=1)
+        .on_conflict_do_update(
+            constraint="uq_form_key_ip",
+            set_={Check429Strikes.count: Check429Strikes.count + 1},  # 累加计数
+        )
+        .returning(Check429Strikes.count)
+    )
+    new_count = int(session.execute(strike).scalar_one())  # 获取新计数
+
+    # 如果未达到永久封禁的阈值，直接返回
+    if new_count < CHECK_429_STRIKES_TO_PERMA_BLOCK:
+        return
+
+    # 达到阈值后，构造主机级（host级别，单IP）perma block，对ip（/32或/128）插入或更新IpRateLimitOverride，设置为永久禁止(limit_per_hour=0)
+    cidr = _host_cidr(ip)
+    session.execute(
+        insert(IpRateLimitOverride)
+        .values(
+            form_key=form_key,
+            ip_range=cidr,
+            limit_per_hour=0,  # 封禁
+            note=CHECK_429_PERMA_BLOCK_NOTE,
+        )
+        .on_conflict_do_update(
+            constraint="uq_form_key_ip_range",
+            set_={
+                IpRateLimitOverride.limit_per_hour: 0,
+                IpRateLimitOverride.enabled: True,
+                IpRateLimitOverride.note: CHECK_429_PERMA_BLOCK_NOTE,
+                IpRateLimitOverride.updated_at: func.now(),
+            },
+        )
+    )
