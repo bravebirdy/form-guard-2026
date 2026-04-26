@@ -4,7 +4,7 @@ import ipaddress
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import Select, and_, desc, func, or_, select, text
+from sqlalchemy import Select, and_, desc, func, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.orm import Session
@@ -192,104 +192,3 @@ def record_success(
     session.add(event)
     session.flush()
     return int(event.id)
-
-
-def _single_ip_cidr(ip: str) -> str:
-    addr = ipaddress.ip_address(ip)
-    if isinstance(addr, ipaddress.IPv4Address):
-        return f"{addr}/32"
-    return f"{addr}/128"
-
-
-def auto_block_if_exceeded(
-    session: Session,
-    form_key: str,
-    ip: str,
-    *,
-    now: datetime | None = None,
-    exceed_by: int = AUTO_BLOCK_EXCEED_BY,
-    note: str = AUTO_BLOCK_NOTE,
-) -> bool:
-    """
-    After recording a successful submission, if the last-60-min window used count
-    exceeds current limit by `exceed_by`, auto-insert a form-specific single-IP block.
-    Returns True when a new override row is inserted.
-    """
-    now = now or _now()
-    window_start = now - WINDOW
-
-    match = match_rule(session, form_key=form_key, ip=ip)
-    limit = int(match.limit_per_hour)
-    if limit <= 0:
-        return False
-
-    used_stmt = (
-        select(func.count())
-        .select_from(SubmissionEvent)
-        .where(
-            and_(
-                SubmissionEvent.form_key == form_key,
-                SubmissionEvent.ip == ip,
-                SubmissionEvent.occurred_at > window_start,
-            )
-        )
-    )
-    used = int(session.execute(used_stmt).scalar_one())
-    if used < limit + int(exceed_by):
-        return False
-
-    ip_range = _single_ip_cidr(ip)
-
-    # Fast path: do nothing if already blocked for this form+ip_range.
-    exists_stmt = (
-        select(IpRateLimitOverride.id)
-        .where(IpRateLimitOverride.form_key == form_key)
-        .where(IpRateLimitOverride.ip_range == ip_range)
-        .limit(1)
-    )
-    if session.execute(exists_stmt).first() is not None:
-        return False
-
-    # Concurrency-safe insert: rely on unique(form_key, ip_range) and ignore conflicts.
-    stmt = (
-        insert(IpRateLimitOverride)
-        .values(
-            form_key=form_key,
-            ip_range=ip_range,
-            limit_per_hour=0,
-            enabled=True,
-            note=note,
-        )
-        .on_conflict_do_nothing(
-            index_elements=[
-                IpRateLimitOverride.form_key.name,
-                IpRateLimitOverride.ip_range.name,
-            ]
-        )
-        .returning(IpRateLimitOverride.id)
-    )
-
-    try:
-        try:
-            with session.begin_nested():
-                inserted_id = session.execute(stmt).scalar_one_or_none()
-        except ProgrammingError:
-            # If the unique constraint isn't present yet (migrations not applied),
-            # roll back the failed SAVEPOINT and fall back to best-effort insert.
-            session.rollback()
-            with session.begin_nested():
-                session.add(
-                    IpRateLimitOverride(
-                        form_key=form_key,
-                        ip_range=ip_range,
-                        limit_per_hour=0,
-                        enabled=True,
-                        note=note,
-                    )
-                )
-                session.flush()
-                inserted_id = 1
-    except IntegrityError:
-        return False
-
-    return inserted_id is not None

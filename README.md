@@ -24,5 +24,3 @@ curl -sS -X POST "http://localhost:8000/v1/rate-limit/check" \
   -H "Content-Type: application/json" \
   -d '{"form_key":"contact_us"}' | jq .
 ```
-
-
